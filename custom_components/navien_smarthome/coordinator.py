@@ -585,6 +585,14 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
             raise HomeAssistantError(str(err)) from err
 
     async def async_boiler_mode(self, device_id, mode):
+        await self._async_boiler_control(device_id, mode)
+
+    async def async_boiler_temperature(self, device_id, temperature):
+        if temperature is None:
+            raise HomeAssistantError("실내 설정 온도를 입력해 주세요")
+        await self._async_boiler_control(device_id, 5, temperature=temperature)
+
+    async def _async_boiler_control(self, device_id, mode, *, temperature=None):
         device = self.boilers.get(device_id)
         if device is None or mode not in (4, 5) or isinstance(mode, bool):
             raise HomeAssistantError("지원하지 않는 보일러 또는 모드입니다")
@@ -593,9 +601,12 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         if not device.status or time.monotonic() - device.status_stamp > 1800:
             await self._async_boiler_request(device)
             raise HomeAssistantError("최신 보일러 상태를 요청했습니다. 잠시 후 다시 선택해 주세요")
-        if device.status.get("operationMode") == mode:
+        if temperature is not None and device.status.get("operationMode") != 5:
+            raise HomeAssistantError("실내난방 모드에서 온도를 조절해 주세요")
+        if temperature is None and device.status.get("operationMode") == mode:
             return
-        temperature = device.status.get("insideTemperatureSetting") if mode == 5 else None
+        if temperature is None and mode == 5:
+            temperature = device.status.get("insideTemperatureSetting")
         await self._async_boiler_request(device, mode=mode, temperature=temperature)
         device.command_log.append({"mode": mode, "temperature": temperature, "sent": True})
         del device.command_log[:-20]
@@ -606,7 +617,7 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
                 try:
                     await self._async_boiler_request(target)
                 except (HomeAssistantError, ConfigEntryAuthFailed) as err:
-                    _LOGGER.debug("보일러 모드 재확인 실패: %s", err)
+                    _LOGGER.debug("보일러 설정 재확인 실패: %s", err)
         async_call_later(self.hass, 2, readback)
 
     async def _async_request_initial_state(self) -> None:

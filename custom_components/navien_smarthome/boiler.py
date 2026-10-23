@@ -115,6 +115,18 @@ class BoilerDevice:
         did = (self.raw.get("Properties") or {}).get("did") or {}
         return numeric_tree((did.get("response") or {}).get("feature")) or {}
 
+    @property
+    def inside_temperature_bounds(self) -> tuple[int, int] | None:
+        """Expose only the integer Celsius encoding supported by the request builder."""
+        feature = self.feature
+        low, high = feature.get("insideTemperatureMin"), feature.get("insideTemperatureMax")
+        if feature.get("insideTemperatureIncrementUnitType") != 1:
+            return None
+        if any(isinstance(value, bool) or not isinstance(value, (int, float))
+               or not math.isfinite(value) or value != int(value) for value in (low, high)):
+            return None
+        return (int(low), int(high)) if low < high else None
+
     def diagnostics(self) -> dict[str, Any]:
         return {
             "model_name": "NR-40D",
@@ -158,14 +170,13 @@ def build_boiler_request(raw, client_id, *, mode=None, temperature=None, now=Non
     if mode == 4:
         request["mode"] = "goout-on"
     elif mode == 5:
-        feature = BoilerDevice(raw).feature
-        low, high = feature.get("insideTemperatureMin"), feature.get("insideTemperatureMax")
+        bounds = BoilerDevice(raw).inside_temperature_bounds
         if (isinstance(temperature, bool) or not isinstance(temperature, (int, float))
-                or not math.isfinite(temperature) or not isinstance(low, (int, float))
-                or not isinstance(high, (int, float)) or not low <= temperature <= high):
-            raise ValueError("확인된 현재 설정 온도가 필요합니다. 상태를 먼저 수신해 주세요")
+                or not math.isfinite(temperature) or bounds is None
+                or not bounds[0] <= temperature <= bounds[1]):
+            raise ValueError("기기가 알려준 실내 설정 온도 범위의 값이 필요합니다")
         # NR-40D fixture declares increment=1. Other encodings require separate validation.
-        if feature.get("insideTemperatureIncrementUnitType") != 1 or temperature != int(temperature):
+        if temperature != int(temperature):
             raise ValueError("확인되지 않은 온도 단위입니다")
         request.update(mode="inside-heat", param=[int(temperature)])
     return {"serviceCode": 100, "payload": {

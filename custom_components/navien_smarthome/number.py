@@ -1,4 +1,4 @@
-"""에어원 목표 습도.
+"""보일러 실내 설정 온도와 에어원 목표 습도.
 
 제습·환기제습에서만 쓴다. **범위를 코드에 적지 않는다** — 서버가 운전 조합마다
 `additionalData` 의 `min`/`max` 를 알려주므로 그것만 쓴다. 안 알려주면 만들지 않는다.
@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import Any
 
 from homeassistant.components.number import NumberEntity, NumberMode
+from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
@@ -19,7 +20,7 @@ from . import NavienSmartConfigEntry
 from .airone import AironeDevice
 from .const import AIRONE_HUMIDITY_STEP, AIRONE_OPTION_NONE
 from .coordinator import NavienSmartCoordinator
-from .entity import AironeEntity
+from .entity import AironeEntity, BoilerEntity
 
 
 async def async_setup_entry(
@@ -28,12 +29,55 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     coordinator = entry.runtime_data
-    async_add_entities(
+    entities: list[NumberEntity] = [
         AironeHumidityNumber(coordinator, device)
         for device in coordinator.airone.values()
         # 어떤 조합에서든 서버가 습도 범위를 알려줄 때만 만든다.
         if any(mode.wants_humidity for mode in device.modes)
+    ]
+    entities.extend(
+        BoilerTemperatureNumber(coordinator, device)
+        for device in coordinator.boilers.values()
+        if device.inside_temperature_bounds is not None
     )
+    async_add_entities(entities)
+
+
+class BoilerTemperatureNumber(BoilerEntity, NumberEntity):
+    """실내난방 설정 온도. 외출 중에는 온도 조절을 비활성화한다."""
+
+    _attr_name = "실내 설정 온도"
+    _attr_icon = "mdi:thermometer"
+    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+    _attr_native_step = 1
+    _attr_mode = NumberMode.BOX
+
+    def __init__(self, coordinator, device):
+        super().__init__(coordinator, device)
+        self._attr_unique_id = f"{device.device_id}_boiler_inside_temperature"
+
+    @property
+    def native_min_value(self):
+        bounds = self.device.inside_temperature_bounds if self.device else None
+        return bounds[0] if bounds else None
+
+    @property
+    def native_max_value(self):
+        bounds = self.device.inside_temperature_bounds if self.device else None
+        return bounds[1] if bounds else None
+
+    @property
+    def available(self):
+        device = self.device
+        return (super().available and device.inside_temperature_bounds is not None
+                and device.status.get("operationMode") == 5)
+
+    @property
+    def native_value(self):
+        return self.device.status.get("insideTemperatureSetting") if self.device else None
+
+    async def async_set_native_value(self, value):
+        await self.coordinator.async_boiler_temperature(self._device_id, value)
 
 
 class AironeHumidityNumber(AironeEntity, NumberEntity):

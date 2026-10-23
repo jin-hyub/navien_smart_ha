@@ -8,6 +8,9 @@ from homeassistant.components.sensor import SensorEntity
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from .const import DOMAIN
 
 from . import NavienSmartConfigEntry
 from .airone import AironeDevice, as_number, level_text, text_or_none
@@ -58,6 +61,7 @@ async def async_setup_entry(
             for index in range(len(airone.filter_types))
         )
 
+    entities.extend(BoilerDiscoverySensor(coordinator, device) for device in coordinator.boilers.values())
     async_add_entities(entities)
 
 
@@ -359,4 +363,40 @@ class AironeFilterSensor(AironeEntity, SensorEntity):
         return {
             "filter_type": raw.get("type"),
             "replace_period": raw.get("replace_period"),
+        }
+
+
+class _BoilerCoordinatorEntity(CoordinatorEntity):
+    """Coordinator base, separate from the sensor platform base."""
+
+
+class BoilerDiscoverySensor(_BoilerCoordinatorEntity, SensorEntity):
+    """Register NR-40D without presenting unverified values as heating state."""
+
+    _attr_has_entity_name = True
+    _attr_name = "연동 개발 상태"
+    _attr_icon = "mdi:radiator"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator, device):
+        super().__init__(coordinator)
+        self._device_id = device.device_id
+        self._attr_unique_id = f"{device.device_id}_boiler_development"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, device.device_id)},
+            manufacturer="경동나비엔", name=device.nickname, model="NR-40D",
+        )
+
+    @property
+    def native_value(self):
+        if self._device_id not in self.coordinator.boilers:
+            return None
+        return "응답 수집 중" if self.coordinator.boiler_event_count else "응답 대기"
+
+    @property
+    def extra_state_attributes(self):
+        return {
+            "control_enabled": False,
+            "home_received_events": self.coordinator.boiler_event_count,
+            "mqtt_connected": self.coordinator.mqtt_connected,
         }

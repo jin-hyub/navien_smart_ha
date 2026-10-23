@@ -38,6 +38,9 @@ TO_REDACT = {
     "refreshToken",
     "accountId",
     "clientId",
+    "clientID",
+    "sessionID",
+    "macAddress",
     "defaultClientId",
     "deviceId",
     "eventId",
@@ -131,6 +134,12 @@ async def async_get_config_entry_diagnostics(
             _airone_view(device, device.device_id in coordinator.restored_devices)
             for device in coordinator.airone.values()
         ],
+        "boiler_discovery": [device.diagnostics() for device in coordinator.boilers.values()],
+        "boiler_capture": {
+            "scope": "home",
+            "received_events": coordinator.boiler_event_count,
+            "recent_numeric_events": list(coordinator.boiler_events),
+        },
         "supported_devices": supported,
         # 이 항목이 비어 있지 않으면 이슈에 그대로 붙여 주세요.
         "report_wanted_devices": report_wanted,

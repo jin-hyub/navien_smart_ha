@@ -47,6 +47,7 @@ from .const import (
     TOPIC_PREFIX,
     UPDATE_INTERVAL_SECONDS,
 )
+from .boiler import BoilerDevice
 from .models import NavienDevice
 from .mqtt import NavienSmartMqtt
 
@@ -114,6 +115,9 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         # 에어원은 매트와 상태 체계가 달라 같은 dict 에 섞지 않는다. 검증이 끝난
         # 매트 경로를 건드리지 않는 것이 우선이다.
         self.airone: dict[str, AironeDevice] = {}
+        self.boilers: dict[str, BoilerDevice] = {}
+        self.boiler_events: list[dict[str, Any]] = []
+        self.boiler_event_count = 0
         # 구세대는 `remote/status` 요청에 답하지 않는다. 마지막으로 받은 상태를
         # 남겨 두었다가 시작할 때 되살린다 — 그러지 않으면 첫 조작 전까지
         # 전원·모드·풍량이 모두 비어 보인다.
@@ -186,6 +190,7 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         self.raw_devices = raw_devices
         self.unsupported = []
 
+        boilers: dict[str, BoilerDevice] = {}
         previous_airone = self.airone
         airone: dict[str, AironeDevice] = {}
 
@@ -201,6 +206,10 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
             # 매트는 정수로 오는 것을 확인했다. 에어원도 그럴 거라 단정하지 않는다 —
             # 문자열로 오면 비교가 조용히 실패해 기기가 통째로 사라진다.
             service_code = _as_int(raw.get("serviceCode"))
+            boiler = BoilerDevice.parse(raw)
+            if boiler is not None:
+                boilers[boiler.device_id] = boiler
+                continue
             if service_code not in SUPPORTED_SERVICE_CODES:
                 self.unsupported.append(raw)
                 self._log_unsupported(raw)
@@ -247,6 +256,7 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
 
             devices[device.device_id] = device
 
+        self.boilers = boilers
         self.airone = airone
         self._tune_interval()
         await self._async_update_air_sensors()
@@ -514,6 +524,8 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         }
         if self.airone and (prefix := TOPIC_PREFIX.get(SERVICE_AIRONE)):
             prefixes.add(prefix)
+        if self.boilers:
+            prefixes.add("smarttok")
         if not prefixes:
             _LOGGER.debug("구독할 기기가 없어 MQTT 를 시작하지 않습니다")
             return
@@ -528,8 +540,17 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
             on_reported=self._handle_reported,
             on_subscribed=self._async_request_initial_state,
             on_airone_reported=self._handle_airone_reported,
+            on_boiler_event=self._handle_boiler_event,
         )
         await self._mqtt.async_start()
+
+    @callback
+    def _handle_boiler_event(self, event: dict[str, Any]) -> None:
+        # Home-scoped capture. Do not assign an unknown envelope to a device.
+        self.boiler_event_count += 1
+        self.boiler_events.append(event)
+        del self.boiler_events[:-20]
+        self._async_push_update(self.data or {})
 
     async def _async_request_initial_state(self) -> None:
         """켜져 있는 기기에 상태를 올려달라고 한다.

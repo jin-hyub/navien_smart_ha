@@ -35,3 +35,6 @@ CLAUDE.md
 
 # 기여자 로컬 AI 도구 상태 파일. PR 에 딸려 온 적이 있다.
 .omc/
+
+# Local Home Assistant diagnostics
+config_entry-*.json

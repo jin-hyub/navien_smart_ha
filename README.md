@@ -1,6 +1,7 @@
-# NR-40D 개발 버전 (0.18.2)
+# NR-40D 개발 버전 (0.18.3)
 
 NR-40D 기기 등록 및 보일러 MQTT 응답 수집을 추가한 포크입니다.
+0.18.3에서는 JSON 문자열로 감싼 응답도 수집하고, 진단정보의 `mqtt_messages.boiler_last_message_shape`에 마지막 메시지의 구조와 자료형을 기록합니다. 문자열 값은 기록하지 않습니다.
 **현재 난방·온수 제어와 현재 온도 표시는 구현하지 않았습니다.**
 
 HACS 사용자 지정 저장소는 `https://github.com/jin-hyub/navien_smart_ha`이고 유형은 Integration입니다.

@@ -11,6 +11,16 @@ def numeric_tree(value: Any, depth: int = 0) -> Any:
     """Keep numeric protocol fields, never identifiers or arbitrary strings."""
     if depth > 12:
         return None
+    if isinstance(value, str) and len(value) <= 65536:
+        # Some MQTT envelopes contain a JSON document serialized as a string.
+        # Never keep the original string, and apply the same identifier filtering.
+        try:
+            decoded = json.loads(value)
+        except (ValueError, RecursionError):
+            return None
+        if isinstance(decoded, (dict, list)):
+            return numeric_tree(decoded, depth + 1)
+        return None
     if isinstance(value, dict):
         result = {}
         for key, inner in list(value.items())[:128]:
@@ -41,6 +51,35 @@ def extract_boiler_event(payload: bytes) -> dict[str, Any] | None:
     if not isinstance(event, dict):
         return None
     return numeric_tree(event)
+
+
+def boiler_event_shape(payload: bytes) -> dict[str, Any]:
+    """Bounded structural sample: field names and types, no string values."""
+    if len(payload) > 65536:
+        return {"format": "oversized"}
+    try:
+        event = json.loads(payload)
+    except (ValueError, UnicodeDecodeError, RecursionError):
+        return {"format": "non_json", "bytes": len(payload)}
+
+    def shape(value: Any, depth: int = 0) -> Any:
+        if depth >= 6:
+            return type(value).__name__
+        if isinstance(value, dict):
+            return {key: shape(inner, depth + 1) for key, inner in list(value.items())[:32]}
+        if isinstance(value, list):
+            return [shape(inner, depth + 1) for inner in value[:3]]
+        if isinstance(value, str):
+            try:
+                decoded = json.loads(value)
+            except (ValueError, RecursionError):
+                return "string"
+            if isinstance(decoded, (dict, list)):
+                return {"json_string": shape(decoded, depth + 1)}
+            return "string"
+        return type(value).__name__
+
+    return {"format": "json", "shape": shape(event)}
 
 
 @dataclass

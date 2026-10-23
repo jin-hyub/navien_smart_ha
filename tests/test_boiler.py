@@ -6,7 +6,7 @@ import sys
 from types import SimpleNamespace
 
 from harness import Report
-from navien_smarthome.boiler import BoilerDevice, extract_boiler_event
+from navien_smarthome.boiler import BoilerDevice, boiler_event_shape, extract_boiler_event
 from navien_smarthome.mqtt import NavienSmartMqtt
 from navien_smarthome.coordinator import NavienSmartCoordinator
 from navien_smarthome.diagnostics import _identifiers, _scrub
@@ -28,6 +28,10 @@ event = extract_boiler_event(json.dumps({"payload": {
     "deviceSeq": 123, "token": "private-token", "name": "private-name",
 }}).encode())
 r.ok(event == {"payload": {"temperature": 22, "unknownFlag": 2}}, "numeric fields only; identifiers removed")
+r.ok(extract_boiler_event(b'{"payload":"{\\"temperature\\":22,\\"sessionID\\":123}"}') == {"payload": {"temperature": 22}}, "JSON string envelopes decoded with redaction")
+shape = boiler_event_shape(b'{"payload":{"status":"sample-secret","macAddress":"private-mac"}}')
+r.ok("sample-secret" not in json.dumps(shape) and "private-mac" not in json.dumps(shape), "structural diagnostics never include string values")
+r.ok(boiler_event_shape(b'invalid')["format"] == "non_json", "non JSON format is visible")
 for payload in (b'invalid', b'[]', b'null', b'x' * 65537):
     r.ok(extract_boiler_event(payload) is None, "malformed or oversized event rejected")
 

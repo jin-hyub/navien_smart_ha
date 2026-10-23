@@ -25,7 +25,7 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 from homeassistant.util.ssl import get_default_context
 
-from .boiler import extract_boiler_event
+from .boiler import boiler_event_shape, extract_boiler_event
 from .api import AwsCredentials
 from .const import (
     IOT_ENDPOINT,
@@ -442,6 +442,7 @@ class NavienSmartMqtt:
         # 한 파서로 둘 다 다루면 한쪽이 조용히 버려진다.
         if "/smarttok/" in message.topic:
             _bump(self.stats, "boiler_received")
+            self.stats["boiler_last_message_shape"] = boiler_event_shape(message.payload)
             event = extract_boiler_event(message.payload)
             if event is None:
                 _bump(self.stats, "boiler_dropped")

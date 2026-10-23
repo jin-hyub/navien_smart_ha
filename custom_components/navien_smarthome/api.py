@@ -452,9 +452,10 @@ class NavienSmartApi:
             raw_body=raw,
         )
 
-    async def async_boiler_request(self, home_seq, device, client_id, *, mode=None, temperature=None):
+    async def async_boiler_request(self, home_seq, device, client_id, *, mode=None, temperature=None, hot_water_temperature=None):
         from .boiler import build_boiler_request
-        body = build_boiler_request(device, client_id, mode=mode, temperature=temperature)
+        body = build_boiler_request(device, client_id, mode=mode, temperature=temperature,
+                                    hot_water_temperature=hot_water_temperature)
         session = self._require_session()
         raw = json.dumps(body, ensure_ascii=False)
         for topic in (body["payload"]["requestTopic"], body["payload"]["responseTopic"]):

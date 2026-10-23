@@ -572,12 +572,13 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         device.status_version = version
         self._async_push_update(self.data or {})
 
-    async def _async_boiler_request(self, device, *, mode=None, temperature=None):
+    async def _async_boiler_request(self, device, *, mode=None, temperature=None, hot_water_temperature=None):
         if self._mqtt is None or not self._mqtt.connected:
             raise HomeAssistantError("보일러 실시간 연결이 없습니다. 잠시 후 다시 시도해 주세요")
         try:
             await self.api.async_boiler_request(
-                self.home_seq, device.raw, self._mqtt.client_id, mode=mode, temperature=temperature
+                self.home_seq, device.raw, self._mqtt.client_id, mode=mode, temperature=temperature,
+                hot_water_temperature=hot_water_temperature,
             )
         except NavienSmartAuthError as err:
             raise ConfigEntryAuthFailed(str(err)) from err
@@ -587,28 +588,41 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
     async def async_boiler_mode(self, device_id, mode):
         await self._async_boiler_control(device_id, mode)
 
-    async def async_boiler_temperature(self, device_id, temperature):
+    async def async_boiler_temperature(self, device_id, temperature, *, kind="inside"):
         if temperature is None:
-            raise HomeAssistantError("실내 설정 온도를 입력해 주세요")
-        await self._async_boiler_control(device_id, 5, temperature=temperature)
+            raise HomeAssistantError("설정 온도를 입력해 주세요")
+        if kind == "hot_water":
+            await self._async_boiler_control(device_id, None, hot_water_temperature=temperature)
+        elif kind in ("inside", "ondol"):
+            await self._async_boiler_control(device_id, 5 if kind == "inside" else 6, temperature=temperature)
+        else:
+            raise HomeAssistantError("지원하지 않는 온도 설정입니다")
 
-    async def _async_boiler_control(self, device_id, mode, *, temperature=None):
+    async def _async_boiler_control(self, device_id, mode, *, temperature=None, hot_water_temperature=None):
         device = self.boilers.get(device_id)
-        if device is None or mode not in (4, 5) or isinstance(mode, bool):
+        hot_water = hot_water_temperature is not None
+        if (device is None or isinstance(mode, bool)
+                or (mode not in (4, 5, 6) and not (mode is None and hot_water))):
             raise HomeAssistantError("지원하지 않는 보일러 또는 모드입니다")
         if str(device.raw.get("connected")) != "1":
             raise HomeAssistantError("보일러가 오프라인입니다")
         if not device.status or time.monotonic() - device.status_stamp > 1800:
             await self._async_boiler_request(device)
             raise HomeAssistantError("최신 보일러 상태를 요청했습니다. 잠시 후 다시 선택해 주세요")
-        if temperature is not None and device.status.get("operationMode") != 5:
-            raise HomeAssistantError("실내난방 모드에서 온도를 조절해 주세요")
-        if temperature is None and device.status.get("operationMode") == mode:
+        if temperature is not None and device.status.get("operationMode") != mode:
+            label = "실내난방" if mode == 5 else "온돌난방"
+            raise HomeAssistantError(f"{label} 모드에서 온도를 조절해 주세요")
+        if not hot_water and temperature is None and device.status.get("operationMode") == mode:
             return
-        if temperature is None and mode == 5:
-            temperature = device.status.get("insideTemperatureSetting")
-        await self._async_boiler_request(device, mode=mode, temperature=temperature)
-        device.command_log.append({"mode": mode, "temperature": temperature, "sent": True})
+        if temperature is None and mode in (5, 6):
+            field = "insideTemperatureSetting" if mode == 5 else "ondolTemperatureSetting"
+            temperature = device.status.get(field)
+        await self._async_boiler_request(device, mode=mode, temperature=temperature,
+                                         hot_water_temperature=hot_water_temperature)
+        record = {"mode": mode, "temperature": temperature, "sent": True}
+        if hot_water:
+            record["hot_water_temperature"] = hot_water_temperature
+        device.command_log.append(record)
         del device.command_log[:-20]
 
         async def readback(_now):

@@ -35,7 +35,7 @@ heat=build_boiler_request(raw,'uuid-U1',mode=5,temperature=24,now=123)
 r.ok(heat['payload']['request']['mode']=='inside-heat' and heat['payload']['request']['param']==[24],'indoor mode preserves known setting')
 status=build_boiler_request(raw,'uuid-U1',now=123)['payload']
 r.ok(status['requestTopic'].endswith('/status') and 'mode' not in status['request'] and status['request']['param']==[],'startup status request does not set a mode')
-for kwargs in [{'mode':6},{'mode':True},{'mode':5},{'mode':5,'temperature':float('nan')},{'mode':5,'temperature':41},{'mode':5,'temperature':23.5}]:
+for kwargs in [{'mode':7},{'mode':True},{'mode':5},{'mode':5,'temperature':float('nan')},{'mode':5,'temperature':41},{'mode':5,'temperature':23.5}]:
  try:build_boiler_request(raw,'uuid-U1',**kwargs);r.ok(False,'reject invalid command')
  except ValueError:r.ok(True,'reject invalid command')
 for change in [{'modelCode':'011'},{'deviceId':'short'},{'mqttTopicKey':'bad/#'}]:

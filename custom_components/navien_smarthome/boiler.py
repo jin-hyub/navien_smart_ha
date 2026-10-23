@@ -117,10 +117,17 @@ class BoilerDevice:
 
     @property
     def inside_temperature_bounds(self) -> tuple[int, int] | None:
+        return self.temperature_bounds("inside")
+
+    def temperature_bounds(self, kind: str) -> tuple[int, int] | None:
         """Expose only the integer Celsius encoding supported by the request builder."""
+        prefix = BOILER_TEMPERATURE_PREFIXES.get(kind)
+        if prefix is None:
+            return None
         feature = self.feature
-        low, high = feature.get("insideTemperatureMin"), feature.get("insideTemperatureMax")
-        if feature.get("insideTemperatureIncrementUnitType") != 1:
+        low, high = feature.get(f"{prefix}Min"), feature.get(f"{prefix}Max")
+        increment = feature.get(f"{prefix}IncrementUnitType")
+        if isinstance(increment, bool) or increment != 1:
             return None
         if any(isinstance(value, bool) or not isinstance(value, (int, float))
                or not math.isfinite(value) or value != int(value) for value in (low, high)):
@@ -142,10 +149,26 @@ class BoilerDevice:
 # Source: SmartTokControlFragment tab handlers and BoilerConstants
 # boilerMqttPayload dispatches model 003 through boilerNR30SeriesMqttPayload
 # (RequestControlDotWifi); do NOT use the similarly named NR40 method.
-BOILER_MODES = {4: "외출", 5: "실내난방"}
+# SmartTokControlFragment.updateTabUI maps operationMode 6 to ondolHeatTab;
+# executeJob sends ondol-heat with the observed ondolTemperatureSetting.
+BOILER_MODES = {4: "외출", 5: "실내난방", 6: "온돌난방"}
+BOILER_TEMPERATURE_PREFIXES = {
+    "inside": "insideTemperature", "ondol": "ondolTemperature", "hot_water": "hotWaterTemperature",
+}
 
 
-def build_boiler_request(raw, client_id, *, mode=None, temperature=None, now=None):
+def _temperature_param(device, kind, temperature):
+    bounds = device.temperature_bounds(kind)
+    if (isinstance(temperature, bool) or not isinstance(temperature, (int, float))
+            or not math.isfinite(temperature) or bounds is None
+            or not bounds[0] <= temperature <= bounds[1]):
+        raise ValueError("기기가 알려준 설정 온도 범위의 값이 필요합니다")
+    if temperature != int(temperature):
+        raise ValueError("설정 온도는 1°C 단위로 입력해 주세요")
+    return [int(temperature)]
+
+
+def build_boiler_request(raw, client_id, *, mode=None, temperature=None, hot_water_temperature=None, now=None):
     """Build only observed modes, following the app's model-003 request envelope."""
     if BoilerDevice.parse(raw) is None:
         raise ValueError("지원하지 않는 보일러 모델입니다")
@@ -161,24 +184,27 @@ def build_boiler_request(raw, client_id, *, mode=None, temperature=None, now=Non
         raise ValueError("보일러 응답 토픽에 허용되지 않는 문자가 있습니다")
     if not client_id:
         raise ValueError("MQTT 클라이언트 ID가 아직 준비되지 않았습니다")
-    if mode not in (None, 4, 5) or isinstance(mode, bool):
-        raise ValueError("외출 또는 실내난방만 지원합니다")
+    if mode not in (None, *BOILER_MODES) or isinstance(mode, bool):
+        raise ValueError("외출, 실내난방 또는 온돌난방만 지원합니다")
+    if hot_water_temperature is not None and (mode is not None or temperature is not None):
+        raise ValueError("온수 온도와 난방 모드는 별도로 설정해 주세요")
+    if temperature is not None and mode not in (5, 6):
+        raise ValueError("난방 온도는 실내난방 또는 온돌난방과 함께 설정해 주세요")
     stamp = str(int((time.time() if now is None else now) * 1000))
-    kind = "status" if mode is None else "control"
+    kind = "status" if mode is None and hot_water_temperature is None else "control"
     request = {"macAddress": device_id[:12], "registerAt": stamp,
                "additionalValue": device_id[12:16], "param": []}
     if mode == 4:
         request["mode"] = "goout-on"
-    elif mode == 5:
-        bounds = BoilerDevice(raw).inside_temperature_bounds
-        if (isinstance(temperature, bool) or not isinstance(temperature, (int, float))
-                or not math.isfinite(temperature) or bounds is None
-                or not bounds[0] <= temperature <= bounds[1]):
-            raise ValueError("기기가 알려준 실내 설정 온도 범위의 값이 필요합니다")
-        # NR-40D fixture declares increment=1. Other encodings require separate validation.
-        if temperature != int(temperature):
-            raise ValueError("확인되지 않은 온도 단위입니다")
-        request.update(mode="inside-heat", param=[int(temperature)])
+    elif mode in (5, 6):
+        temperature_kind = "inside" if mode == 5 else "ondol"
+        request.update(mode="inside-heat" if mode == 5 else "ondol-heat",
+                       param=_temperature_param(BoilerDevice(raw), temperature_kind, temperature))
+    elif hot_water_temperature is not None:
+        # SmartTokControlFragment's hot-water temperature observer sends this
+        # independent command with one temperature argument, preserving operationMode.
+        request.update(mode="hotwater-temperature",
+                       param=_temperature_param(BoilerDevice(raw), "hot_water", hot_water_temperature))
     return {"serviceCode": 100, "payload": {
         "sessionID": stamp, "clientID": f"mobile-{client_id}",
         "requestTopic": f"cmd/003/roomcon-{device_id[:12]}/{kind}",

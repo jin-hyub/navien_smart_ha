@@ -398,7 +398,7 @@ class AironeFanSelect(AironeEntity, SelectEntity):
 
 
 class BoilerModeSelect(BoilerEntity, SelectEntity):
-    """외출 / 실내난방; state follows device reports, never HTTP acknowledgement."""
+    """외출 / 실내난방 / 온돌난방; state follows device reports."""
     _attr_name = "난방 모드"
     _attr_icon = "mdi:radiator"
     _attr_options = list(BOILER_MODES.values())
@@ -415,5 +415,5 @@ class BoilerModeSelect(BoilerEntity, SelectEntity):
         from homeassistant.exceptions import HomeAssistantError
         mode = next((key for key, label in BOILER_MODES.items() if label == option), None)
         if mode is None:
-            raise HomeAssistantError("외출 또는 실내난방을 선택해 주세요")
+            raise HomeAssistantError("외출, 실내난방 또는 온돌난방을 선택해 주세요")
         await self.coordinator.async_boiler_mode(self._device_id, mode)

@@ -25,7 +25,7 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 from homeassistant.util.ssl import get_default_context
 
-from .boiler import boiler_event_shape, extract_boiler_event
+from .boiler import boiler_event_shape, extract_boiler_event, extract_boiler_status
 from .api import AwsCredentials
 from .const import (
     IOT_ENDPOINT,
@@ -279,6 +279,7 @@ class NavienSmartMqtt:
         on_subscribed: Callable[[], Awaitable[None]] | None = None,
         on_airone_reported: Callable[[str, dict[str, Any]], None] | None = None,
         on_boiler_event: Callable[[dict[str, Any]], None] | None = None,
+        on_boiler_status: Callable[[str, float, dict[str, Any]], None] | None = None,
     ) -> None:
         self._hass = hass
         # 수신·폐기 집계. 개인정보는 없다 — 개수와 키 이름뿐이다.
@@ -290,6 +291,7 @@ class NavienSmartMqtt:
         self._on_reported = on_reported
         self._on_airone_reported = on_airone_reported
         self._on_boiler_event = on_boiler_event
+        self._on_boiler_status = on_boiler_status
         # 구독이 붙은 뒤에 초기 상태를 요청해야 한다. 순서가 뒤바뀌면 응답을 놓친다.
         self._on_subscribed = on_subscribed
         self._client_id = ""
@@ -443,6 +445,9 @@ class NavienSmartMqtt:
         if "/smarttok/" in message.topic:
             _bump(self.stats, "boiler_received")
             self.stats["boiler_last_message_shape"] = boiler_event_shape(message.payload)
+            status = extract_boiler_status(message.payload)
+            if status is not None and self._on_boiler_status is not None:
+                self._hass.loop.call_soon_threadsafe(self._on_boiler_status, *status)
             event = extract_boiler_event(message.payload)
             if event is None:
                 _bump(self.stats, "boiler_dropped")

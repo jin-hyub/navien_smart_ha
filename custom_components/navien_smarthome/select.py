@@ -33,7 +33,8 @@ from .const import (
     level_label,
 )
 from .coordinator import NavienSmartCoordinator
-from .entity import AironeEntity, NavienSmartEntity
+from .entity import AironeEntity, NavienSmartEntity, BoilerEntity
+from .boiler import BOILER_MODES
 from .models import NavienDevice
 
 
@@ -75,6 +76,7 @@ async def async_setup_entry(
         ):
             entities.append(AironeFanSelect(coordinator, airone))
 
+    entities.extend(BoilerModeSelect(coordinator, device) for device in coordinator.boilers.values())
     async_add_entities(entities)
 
 
@@ -393,3 +395,25 @@ class AironeFanSelect(AironeEntity, SelectEntity):
         await self.coordinator.async_airone_mode(
             device, device.mode, chosen.option, air_volume=chosen.air_volume
         )
+
+
+class BoilerModeSelect(BoilerEntity, SelectEntity):
+    """외출 / 실내난방; state follows device reports, never HTTP acknowledgement."""
+    _attr_name = "난방 모드"
+    _attr_icon = "mdi:radiator"
+    _attr_options = list(BOILER_MODES.values())
+
+    def __init__(self, coordinator, device):
+        super().__init__(coordinator, device)
+        self._attr_unique_id = f"{device.device_id}_boiler_mode"
+
+    @property
+    def current_option(self):
+        return BOILER_MODES.get(self.device.status.get("operationMode")) if self.device else None
+
+    async def async_select_option(self, option):
+        from homeassistant.exceptions import HomeAssistantError
+        mode = next((key for key, label in BOILER_MODES.items() if label == option), None)
+        if mode is None:
+            raise HomeAssistantError("외출 또는 실내난방을 선택해 주세요")
+        await self.coordinator.async_boiler_mode(self._device_id, mode)

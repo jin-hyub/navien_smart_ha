@@ -13,7 +13,7 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
 from homeassistant.helpers.debounce import Debouncer
 from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
@@ -190,6 +190,7 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         self.raw_devices = raw_devices
         self.unsupported = []
 
+        previous_boilers = self.boilers
         boilers: dict[str, BoilerDevice] = {}
         previous_airone = self.airone
         airone: dict[str, AironeDevice] = {}
@@ -208,6 +209,11 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
             service_code = _as_int(raw.get("serviceCode"))
             boiler = BoilerDevice.parse(raw)
             if boiler is not None:
+                if (old_boiler := previous_boilers.get(boiler.device_id)) is not None:
+                    boiler.status = old_boiler.status
+                    boiler.status_stamp = old_boiler.status_stamp
+                    boiler.status_version = old_boiler.status_version
+                    boiler.command_log = old_boiler.command_log
                 boilers[boiler.device_id] = boiler
                 continue
             if service_code not in SUPPORTED_SERVICE_CODES:
@@ -541,6 +547,7 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
             on_subscribed=self._async_request_initial_state,
             on_airone_reported=self._handle_airone_reported,
             on_boiler_event=self._handle_boiler_event,
+            on_boiler_status=self._handle_boiler_status,
         )
         await self._mqtt.async_start()
 
@@ -551,6 +558,56 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         self.boiler_events.append(event)
         del self.boiler_events[:-20]
         self._async_push_update(self.data or {})
+
+    @callback
+    def _handle_boiler_status(self, mac, version, status):
+        matches = [device for device in self.boilers.values() if device.device_id[:12].lower() == mac]
+        if len(matches) != 1:
+            return
+        device = matches[0]
+        if version < device.status_version:
+            return
+        device.status.update(status)
+        device.status_stamp = time.monotonic()
+        device.status_version = version
+        self._async_push_update(self.data or {})
+
+    async def _async_boiler_request(self, device, *, mode=None, temperature=None):
+        if self._mqtt is None or not self._mqtt.connected:
+            raise HomeAssistantError("보일러 실시간 연결이 없습니다. 잠시 후 다시 시도해 주세요")
+        try:
+            await self.api.async_boiler_request(
+                self.home_seq, device.raw, self._mqtt.client_id, mode=mode, temperature=temperature
+            )
+        except NavienSmartAuthError as err:
+            raise ConfigEntryAuthFailed(str(err)) from err
+        except (ValueError, NavienSmartError) as err:
+            raise HomeAssistantError(str(err)) from err
+
+    async def async_boiler_mode(self, device_id, mode):
+        device = self.boilers.get(device_id)
+        if device is None or mode not in (4, 5) or isinstance(mode, bool):
+            raise HomeAssistantError("지원하지 않는 보일러 또는 모드입니다")
+        if str(device.raw.get("connected")) != "1":
+            raise HomeAssistantError("보일러가 오프라인입니다")
+        if not device.status or time.monotonic() - device.status_stamp > 1800:
+            await self._async_boiler_request(device)
+            raise HomeAssistantError("최신 보일러 상태를 요청했습니다. 잠시 후 다시 선택해 주세요")
+        if device.status.get("operationMode") == mode:
+            return
+        temperature = device.status.get("insideTemperatureSetting") if mode == 5 else None
+        await self._async_boiler_request(device, mode=mode, temperature=temperature)
+        device.command_log.append({"mode": mode, "temperature": temperature, "sent": True})
+        del device.command_log[:-20]
+
+        async def readback(_now):
+            target = self.boilers.get(device_id)
+            if target is not None:
+                try:
+                    await self._async_boiler_request(target)
+                except (HomeAssistantError, ConfigEntryAuthFailed) as err:
+                    _LOGGER.debug("보일러 모드 재확인 실패: %s", err)
+        async_call_later(self.hass, 2, readback)
 
     async def _async_request_initial_state(self) -> None:
         """켜져 있는 기기에 상태를 올려달라고 한다.
@@ -568,6 +625,13 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         읽기라 **꺼져 있는 기기도 답한다.** 붙인 직후 설정값이 바로 생기고,
         `climate` 가 「보낼 구역 값이 없습니다」로 막히는 일이 없어진다.
         """
+        for boiler in self.boilers.values():
+            if str(boiler.raw.get("connected")) == "1":
+                try:
+                    await self._async_boiler_request(boiler)
+                except (HomeAssistantError, ConfigEntryAuthFailed) as err:
+                    _LOGGER.debug("보일러 초기 상태 요청 실패: %s", err)
+
         for device in (self.data or {}).values():
             # **먼저 저장된 것을 읽는다.** 온·오프라인을 가리지 않는다 —
             # 기기가 아니라 서버가 답하기 때문이다. 실기기 두 대로 확인했다.

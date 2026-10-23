@@ -452,6 +452,19 @@ class NavienSmartApi:
             raw_body=raw,
         )
 
+    async def async_boiler_request(self, home_seq, device, client_id, *, mode=None, temperature=None):
+        from .boiler import build_boiler_request
+        body = build_boiler_request(device, client_id, mode=mode, temperature=temperature)
+        session = self._require_session()
+        raw = json.dumps(body, ensure_ascii=False)
+        for topic in (body["payload"]["requestTopic"], body["payload"]["responseTopic"]):
+            quoted = json.dumps(topic)
+            raw = raw.replace(quoted, quoted.replace("/", "\\/"))
+        await self._async_authed_request(
+            "POST", f"/devices/{device['deviceSeq']}/control",
+            params={"homeSeq": home_seq, "userSeq": session.user_seq}, raw_body=raw,
+        )
+
     # -- 에어원 ------------------------------------------------------------
 
     async def async_airone_request(

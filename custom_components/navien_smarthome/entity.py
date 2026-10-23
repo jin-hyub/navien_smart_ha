@@ -143,3 +143,26 @@ class AironeMonitorEntity(CoordinatorEntity[NavienSmartCoordinator]):
     def available(self) -> bool:
         device = self.device
         return super().available and device is not None and device.available
+
+
+class BoilerEntity(CoordinatorEntity[NavienSmartCoordinator]):
+    """NR-40D entity, resolved by device ID after every device list refresh."""
+    _attr_has_entity_name = True
+
+    def __init__(self, coordinator, device):
+        super().__init__(coordinator)
+        self._device_id = device.device_id
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, device.device_id)}, manufacturer="경동나비엔",
+            name=device.nickname, model="NR-40D",
+        )
+
+    @property
+    def device(self):
+        return self.coordinator.boilers.get(self._device_id)
+
+    @property
+    def available(self):
+        device = self.device
+        return (super().available and self.coordinator.mqtt_connected and device is not None
+                and str(device.raw.get("connected")) == "1")

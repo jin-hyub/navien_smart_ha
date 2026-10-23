@@ -396,7 +396,8 @@ class BoilerDiscoverySensor(_BoilerCoordinatorEntity, SensorEntity):
     @property
     def extra_state_attributes(self):
         return {
-            "control_enabled": False,
+            "control_enabled": True,
+            "hardware_control_verified": False,
             "home_received_events": self.coordinator.boiler_event_count,
             "mqtt_connected": self.coordinator.mqtt_connected,
         }

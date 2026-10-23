@@ -141,8 +141,14 @@ def build_boiler_request(raw, client_id, *, mode=None, temperature=None, now=Non
     key = str(raw.get("mqttTopicKey") or "")
     if not re.fullmatch(r"[0-9a-fA-F]{16}", device_id):
         raise ValueError("보일러 식별자 형식을 확인할 수 없습니다")
-    if not re.fullmatch(r"[A-Za-z0-9_.-]+", key) or not client_id:
-        raise ValueError("보일러 응답 토픽 또는 MQTT 연결 정보가 없습니다")
+    # The app inserts the server's topic key verbatim. It may contain multiple
+    # MQTT path levels; restricting it to an identifier rejects valid devices.
+    if not key:
+        raise ValueError("서버 기기목록에 보일러 mqttTopicKey가 없습니다")
+    if any(char in key for char in "+#") or any(ord(char) < 32 or ord(char) == 127 for char in key):
+        raise ValueError("보일러 응답 토픽에 허용되지 않는 문자가 있습니다")
+    if not client_id:
+        raise ValueError("MQTT 클라이언트 ID가 아직 준비되지 않았습니다")
     if mode not in (None, 4, 5) or isinstance(mode, bool):
         raise ValueError("외출 또는 실내난방만 지원합니다")
     stamp = str(int((time.time() if now is None else now) * 1000))

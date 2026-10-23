@@ -22,6 +22,14 @@ p=body['payload']
 r.ok(body['serviceCode']==100 and set(p)=={'sessionID','clientID','requestTopic','responseTopic','request'},'003 uses DotWifi envelope, without protocolVersion')
 r.ok(p['requestTopic']=='cmd/003/roomcon-AABBCCDDEEFF/control','control topic follows app')
 r.ok(p['responseTopic']=='cmd/003/test-topic/mobile-uuid-U1/res','response topic includes key and client')
+path_key = build_boiler_request({**raw, 'mqttTopicKey':'home/100/test-topic'}, 'uuid-U1', mode=4)
+r.ok(path_key['payload']['responseTopic']=='cmd/003/home/100/test-topic/mobile-uuid-U1/res', 'server topic key may contain path separators')
+for key, client, expected in [('', 'uuid-U1', 'mqttTopicKey'), ('valid', '', '클라이언트 ID'), ('bad/+', 'uuid-U1', '허용되지'), ('bad\x00key', 'uuid-U1', '허용되지')]:
+ try:
+  build_boiler_request({**raw, 'mqttTopicKey':key}, client, mode=4)
+  r.ok(False, 'invalid route rejected with specific reason')
+ except ValueError as error:
+  r.ok(expected in str(error), 'invalid route rejected with specific reason')
 r.ok(p['request']=={'macAddress':'AABBCCDDEEFF','additionalValue':'1234','registerAt':'123000','param':[],'mode':'goout-on'},'away command has empty param')
 heat=build_boiler_request(raw,'uuid-U1',mode=5,temperature=24,now=123)
 r.ok(heat['payload']['request']['mode']=='inside-heat' and heat['payload']['request']['param']==[24],'indoor mode preserves known setting')

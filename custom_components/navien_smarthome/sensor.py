@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
-from homeassistant.components.sensor import SensorEntity
+from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
+from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
@@ -21,7 +23,7 @@ from .const import (
     LEGACY_VALUE_TABLES,
 )
 from .coordinator import NavienSmartCoordinator
-from .entity import AironeEntity, AironeMonitorEntity, NavienSmartEntity
+from .entity import AironeEntity, AironeMonitorEntity, BoilerEntity, NavienSmartEntity
 from .models import NavienDevice
 
 
@@ -62,6 +64,9 @@ async def async_setup_entry(
         )
 
     entities.extend(BoilerDiscoverySensor(coordinator, device) for device in coordinator.boilers.values())
+    # Initial MQTT status may arrive after platform setup; create the sensor even
+    # before insideTemperature has been received, then update from device reports.
+    entities.extend(BoilerCurrentTemperatureSensor(coordinator, device) for device in coordinator.boilers.values())
     async_add_entities(entities)
 
 
@@ -364,6 +369,27 @@ class AironeFilterSensor(AironeEntity, SensorEntity):
             "filter_type": raw.get("type"),
             "replace_period": raw.get("replace_period"),
         }
+
+
+class BoilerCurrentTemperatureSensor(BoilerEntity, SensorEntity):
+    """기기가 보고한 현재 실내 온도. 설정 온도나 운전모드로 추정하지 않는다."""
+
+    _attr_name = "현재 실내 온도"
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+
+    def __init__(self, coordinator, device):
+        super().__init__(coordinator, device)
+        self._attr_unique_id = f"{device.device_id}_boiler_current_temperature"
+
+    @property
+    def native_value(self) -> float | None:
+        device = self.device
+        value = device.status.get("insideTemperature") if device else None
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            return None
+        return float(value)
 
 
 class _BoilerCoordinatorEntity(CoordinatorEntity):
